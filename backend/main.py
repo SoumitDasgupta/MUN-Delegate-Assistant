@@ -1,12 +1,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Optional
 from scraper import get_all_research
-from ai_engine import generate_brief
+from ai_engine import generate_brief, generate_analysis, chat_with_analysis
 
 app = FastAPI()
 
-# This allows the React frontend to talk to this backend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -15,11 +15,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# This defines what data the frontend will send
+
 class DelegateRequest(BaseModel):
-    country: str
+    mun_type: str
     committee: str
     topic: str
+    country: Optional[str] = None
+    politician: Optional[str] = None
 
 
 @app.get("/")
@@ -31,25 +33,71 @@ def root():
 async def generate(request: DelegateRequest):
     # Step 1: Scrape real-time data
     research = await get_all_research(
-        request.country,
-        request.committee,
-        request.topic
+        country=request.country or request.politician or "",
+        committee=request.committee,
+        topic=request.topic,
+        mun_type=request.mun_type
     )
 
-    # Step 2: Send to Gemini AI with scraped data
+    # Step 2: Generate brief with real data
     brief = await generate_brief(
-        request.country,
-        request.committee,
-        request.topic,
-        research
+        mun_type=request.mun_type,
+        committee=request.committee,
+        topic=request.topic,
+        country=request.country,
+        politician=request.politician,
+        research=research
     )
 
-    # Step 3: Return everything to the frontend
     return {
         "brief": brief,
         "research_sources": {
-            "un_news_count": len(research["un_news"]),
+            "news_count": len(research["news"]),
             "reliefweb_count": len(research["reliefweb"]),
-            "wikipedia_found": bool(research["wikipedia"])
+            "wikipedia_found": bool(research["wikipedia"]),
+            "world_bank_found": bool(research["world_bank"]),
+            "indian_laws_found": len(research["indian_laws"])
         }
     }
+
+@app.post("/analyse")
+async def analyse(request: DelegateRequest):
+    research = await get_all_research(
+        country=request.country or request.politician or "",
+        committee=request.committee,
+        topic=request.topic,
+        mun_type=request.mun_type
+    )
+
+    analysis = await generate_analysis(
+        mun_type=request.mun_type,
+        committee=request.committee,
+        topic=request.topic,
+        country=request.country,
+        politician=request.politician,
+        research=research
+    )
+
+    return {"analysis": analysis}
+
+class ChatRequest(BaseModel):
+    mun_type: str
+    committee: str
+    topic: str
+    country: Optional[str] = None
+    politician: Optional[str] = None
+    messages: list
+
+
+
+@app.post("/chat")
+async def chat(request: ChatRequest):
+    reply = await chat_with_analysis(
+        messages=request.messages,
+        mun_type=request.mun_type,
+        committee=request.committee,
+        topic=request.topic,
+        country=request.country,
+        politician=request.politician,
+    )
+    return {"reply": reply}
